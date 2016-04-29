@@ -3,6 +3,8 @@ fpLocalize
 
 Perform localization using RSSI fingerprints
 """
+from sklearn.decomposition import PCA
+from sklearn.neighbors import KNeighborsClassifier
 
 def _make_unique(mylist):
     return list(set(mylist))
@@ -65,6 +67,18 @@ class FingerprintGenerator:
 
 
     def transform(self, rssi):
+        """
+        Transform list of RSSI observations into fingerprints
+        :param rssi: list of rssi observations per device:
+            rssi = [
+                {
+                    '01:23:45:67:89:01': RSSI,
+                    ...
+                },
+                ...
+            ]
+        :return: list of fingerprints
+        """
         tf = []
         for observation in rssi:
             tf.append([])
@@ -96,6 +110,56 @@ class FingerprintGenerator:
                 beacons.append(beacon)
         self._beacons = _make_unique(beacons)
 
+
+
+
+class RoomClassifier:
+    """
+    Class to convert fingerprints into a room label
+
+    Train the classifier using a set of labeled fingerprints by calling fit().
+    New fingerprints can be labeled using predict(). To recognize fingerprints
+    outside of the calibrated rooms, call predict_outlier() to check whether
+    the fingerprints are outliers.
+
+    This class is a simple wrapper around sklearn's PCA and KNeighborsClassifier.
+    """
+    def __init__(self, outlier_threshold=10.0):
+        """
+        Instantiate room classifier
+        :param outlier_threshold: Threshold in dB for outlier detection
+        """
+        self.dimred = PCA(n_components=5)
+        self.classifier = KNeighborsClassifier(n_neighbors=5)
+        self.outlier_threshold = outlier_threshold
+
+    def fit(self, fingerprints, label):
+        """
+        Train room classifier using labeled fingerprints
+        :param fingerprints: list of fingerprints
+        :param label: list of labels corresponding to fingerprints
+        """
+        fp = self.dimred.fit_transform(fingerprints)
+        self.classifier.fit(fp, label)
+
+    def predict(self, fingerprints):
+        """
+        Predict room label for all fingerprints
+        :param fingerprints: list of fingerprints
+        :return: list of room labels
+        """
+        fp = self.dimred.transform(fingerprints)
+        return self.classifier.predict(fp)
+
+    def predict_outlier(self, fingerprints):
+        """
+        Predict whether the fingerprints are taken in an unlabeled room
+        :param fingerprints: list of fingerprints
+        :return: list of booleans, True if the room is unlabeled, False otherwise
+        """
+        fp = self.dimred.transform(fingerprints)
+        dist, ind = self.classifier.kneighbors(fp, n_neighbors=1, return_distance=True)
+        return (dist > self.outlier_threshold).reshape(-1)
 
 
 
@@ -136,5 +200,29 @@ def _fingerprint_example():
     print fp.transform(obs) # [[-10, -30, -20, -100], [-100, -30, -20, -40]]
 
 
+def _room_example():
+    fingerprints = [
+        [-10, -20, -30, -40, -50],
+        [-50, -60, -70, -80, -90]
+    ]
+    label = [
+        1,
+        2
+    ]
+
+    print 'Instantiate room classifier'
+    clf = RoomClassifier()
+    clf.classifier.n_neighbors = 1 # Reduce neighbors for demonstration
+    print 'Train...'
+    clf.fit(fingerprints, label)
+    print 'Predict rooms 1 and 2...'
+    print clf.predict(fingerprints) # [1 2]
+    print 'Predict inliers'
+    print clf.predict_outlier(fingerprints) # [False False]
+    print 'Predict outlier'
+    print clf.predict_outlier([[0,0,0,0,0]]) # [True]
+
+
 if __name__ == '__main__':
     _fingerprint_example()
+    _room_example()
